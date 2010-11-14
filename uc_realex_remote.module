@@ -1,0 +1,308 @@
+<?php
+/**
+ * @file
+ * Process payments using Realex Redirect.
+ *
+ */
+
+/**
+ * Implementation of hook_payment_gateway().
+ */
+function uc_realex_remote_payment_gateway() {
+  $gateways[] = array(
+    'id' => 'realexremote',
+    'title' => t('Realex Remote'),
+    'description' => t('Process credit card payments using the Realex Remote.'),
+    'settings' => 'uc_realex_remote_settings_form',
+    'credit' => 'uc_realex_remote_charge',
+  );
+
+  return $gateways;
+}
+
+/**
+ * Callback for Realex  payment method settings.
+ */
+function uc_realex_remote_settings_form() {
+  $form['uc_realex_remote_merchant_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Realex Merchant ID'),
+    '#description' => t('Your Realex merchant ID number.'),
+    '#default_value' => variable_get('uc_realex_remote_merchant_id', ''),
+    '#size' => 16,
+  );
+  $form['uc_realex_remote_account'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Realex Account'),
+    '#description' => t('Your Realex account.'),
+    '#default_value' => variable_get('uc_realex_remote_account', 'internet'),
+    '#size' => 16,
+  );
+  $form['uc_realex_remote_shared_secret'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Shared secret for order verification'),
+    '#description' => t('Your Shared Secret as supplied by Realex.'),
+    '#default_value' => variable_get('uc_realex_remote_shared_secret', ''),
+    '#size' => 16,
+  );
+  $form['uc_realex_remote_url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Realex Remote XML URL'),
+    '#description' => t('The Realex URL to submit the order to.'),
+    '#default_value' => variable_get('uc_realex_remote_url', 'https://epage.payandshop.com/epage-remote.cgi'),
+    '#size' => 50,
+  );
+  return $form;
+}
+
+/* Code below is based on sample code provided by Realex at http://resource.realexpayments.com/m.php?ct=integration_oscode.php*/
+
+
+class RealexRemote{
+
+ //Initialise arrays
+ var $parser;
+ var $record;
+ var $timestamp;
+ var $current_field = '';
+ var $field_type;
+ var $ends_record;
+ var $records;
+ var $answers;
+
+  function RealexRemote($response){
+  // Create and initialise XML parser
+  $this->parser = xml_parser_create();
+  xml_set_object($this->parser, &$this);
+  xml_set_element_handler($this->parser, 'startElement', 'endElement');
+  xml_set_character_data_handler($this->parser, "cDataHandler");
+
+  // 1 = single field, 2 = array field, 3 = record container
+  $this->field_type = array('response' =>1,
+                            'orderid' => 1,
+                            'authcode' => 1,
+                            'result' => 1,
+                            'message' => 1,
+                            'pasref' => 1,
+                            'batchid' => 1,
+                            'md5hash' => 1,
+                            'sha1hash' => 1
+                      );
+  
+  xml_parse($this->parser, $response);
+  xml_parser_free($this->parser);
+
+  }
+
+/* THe "startElement()" function is called when an open element tag is found.
+It creates a variable on the fly contructed of all the parent elements
+ joined together with an underscore. So the following xml:
+
+ <response><something>Owen</something></response>
+
+ would create two variables:
+
+ $RESPONSE and $RESPONSE_SOMETHING
+
+*/
+function startElement($parser, $element,&$attrs) {
+  $element = strtolower($element);
+  if($this->field_type[$element] != 0){
+    $this->current_field = $element;
+  }
+  else{
+    $this->current_field = '';
+  }
+  if($element == 'response' && $attrs['TIMESTAMP']){
+    $this->record['timestamp'] = $attrs['TIMESTAMP'];
+  }
+}
+
+function endElement($parser, $element) {
+  $element = strtolower($element);
+  $this->current_field = '';
+}
+
+/* The "cDataHandler()" function is called when the parser encounters any text that's 
+   not an element. Simply places the text found in the variable that 
+   was last created. So using the XML example above the text "Owen"
+   would be placed in the variable $RESPONSE_SOMETHING
+*/
+
+function cDataHandler($parser, $text) {
+  if($this->field_type[$this->current_field] == 2){
+    $this->record[$this->current_field][] = $text;
+  } elseif ($this->field_type[$this->current_field] === 1){
+    $this->record[$this->current_field] .= $text;
+  }
+}
+
+}
+// Main handler for processing credit card transactions.
+//function uc_realex_remote_charge($order_id, $amount, $data) {
+function uc_realex_remote_charge($order_id, $amount, $data) {
+  // Load the order.
+  $order = uc_order_load($order_id);
+
+// In this example the values are hardcoded in.In reality they should be read in by a script or from a database.
+
+  // Realex takes the value in cent.
+  $amount = ($order->order_total*100);
+  $currency = variable_get('uc_currency_code', 'EUR');
+  $cardnumber = $order->payment_details['cc_number'];
+  $cardname = $order->payment_details['cc_owner'];
+  $cardtype = $order->payment_details['cc_type'];
+  // Change for Realex
+  if($cardtype == "Mastercard"){ $cardtype = "MC"; }
+  //$expdate = "0104" 
+  $expdate =   str_pad($order->payment_details['cc_exp_month'], 2, '0', STR_PAD_LEFT) .
+                       substr($order->payment_details['cc_exp_year'], 2, 2);
+  $cvn = $order->payment_details['cc_cvv'];
+
+  foreach($order->products as $product){
+  	$items[] = $product->nid;  
+  }
+  $products = implode(',',$items);
+
+// These values will be provided to you by realex Payments, if you have not already received them please contact us
+
+  $merchantid = variable_get('uc_realex_remote_merchant_id', '');
+  $secret = variable_get('uc_realex_remote_shared_secret', '');
+  $account = variable_get('uc_realex_remote_account', 'internet');
+  $url =  variable_get('uc_realex_remote_url', 'https://epage.payandshop.com/epage-remote.cgi');
+
+//Creates timestamp that is needed to make up orderid
+
+  $timestamp = strftime("%Y%m%d%H%M%S");
+  mt_srand((double)microtime()*1000000);
+
+//You can use any alphanumeric combination for the orderid.Although each transaction must have a unique orderid.
+
+  $orderid = $order->order_id .'-'.$timestamp."-".mt_rand(1, 999);
+
+  $tmp = "$timestamp.$merchantid.$orderid.$amount.$currency.$cardnumber";
+  $sha1hash = sha1($tmp);
+  $tmp = "$sha1hash.$secret";
+  $sha1hash = sha1($tmp);
+
+//A number of variables are needed to generate the request xml that is send to Realex Payments.
+
+  $xml = "<request type='auth' timestamp='$timestamp'>
+  <merchantid>$merchantid</merchantid>
+  <account>$account</account>
+  <orderid>$orderid</orderid>
+  <amount currency='$currency'>$amount</amount>
+  <card> 
+    <number>$cardnumber</number>
+    <expdate>$expdate</expdate>
+    <type>$cardtype</type> 
+    <chname>$cardname</chname> 
+  </card>";
+if($cvn){
+  $xml .="
+   <cvn>
+    <number>$cvn</number>
+    <presind>1</presind>
+  </cvn>";
+}
+ $xml .="
+  <autosettle flag='1'/>
+  <sha1hash>$sha1hash</sha1hash>
+  <tssinfo>
+    <address type=\"billing\">
+      <country>ie</country>
+    </address>
+  <prodid>$products</prodid>
+  </tssinfo>
+</request>";
+// Send the request array to Realex Payments
+  $ch = curl_init();    
+  curl_setopt($ch, CURLOPT_URL, $url);
+  curl_setopt($ch, CURLOPT_POST, 1); 
+  curl_setopt($ch, CURLOPT_USERAGENT, "payandshop.com php version 0.9"); 
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1); 
+  curl_setopt($ch, CURLOPT_POSTFIELDS, $xml);
+  curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, FALSE); // this line makes it work under https 
+  $response = curl_exec ($ch);     
+  curl_close ($ch); 
+
+//Tidy it up
+  $response = eregi_replace ( "[[:space:]]+", " ", $response );
+  $response = eregi_replace ( "[\n\r]", "", $response );
+
+  // parse the response xml
+  $my_response = new RealexRemote($response);
+  $result = $my_response->record;
+  $result['ubercart_order_id'] = substr($result['orderid'], 0, strpos($result['orderid'], '-'));
+
+  // -------------------------------------------------------------
+  //Replace these with the values you receive from Realex Payments.If you have not yet received these values please contact us.
+  $merchantid = variable_get('uc_realex_remote_merchant_id', '');
+  $secret = variable_get('uc_realex_remote_shared_secret', '');
+
+  //---------------------------------------------------------------
+  //Below is the code for creating the digital signature using the md5 algorithm. 
+  //This digital siganture should correspond to the 
+  //one Realex Payments POSTs back to this script and can therefore be used to verify the message Realex sends back.
+  $timestamp = $result['timestamp'];
+  $resultcode = $result['result'];
+  $message = $result['message'];
+  $pasref = $result['pasref'];
+  $authcode = $result['authcode'];
+  $tmp = "$timestamp.$merchantid.$orderid.$resultcode.$message.$pasref.$authcode";
+  $sha1hash = sha1($tmp);
+  $tmp = "$sha1hash.$secret";
+  $sha1hash = sha1($tmp);
+
+
+  $amount = $amount/100; //[Realex expected the order in cents]
+  if ($result['result'] =='00') {
+  //Check to see if hashes match or not
+    if ($sha1hash != $result['sha1hash']) {
+      watchdog('uc_realex_remote', t('Hash match failed for order !order_id.', array('!order_id' => $result['ubercart_order_id'])));
+      drupal_set_message("hashes don't match - response not authenticated!");
+      $success = FALSE;
+    }
+    else {
+      $comment = t('Paid by Realex online for order #!order, Transaction #!transid , Batch #!batchid', 
+                    array(
+                    '!order' => $result['ubercart_order_id'], 
+                    '!transid' => $result['pasref'], 
+                    '!batchid' => $result['batchid']));
+
+      // Add a comment to let sales team know this came in through the site.
+      uc_order_comment_save($order->order_id, $user->uid, $comment, 'admin');
+
+      $success = TRUE;
+    }
+  }
+  
+  else {
+    $success = FALSE;
+  }
+
+
+  if ($success) {
+    $context = array(
+      'revision' => 'formatted-original',
+      'type' => 'amount',
+    );
+    $message = t('Credit card charged: !amount', array('!amount' => uc_price($amount, $context)));
+    uc_order_comment_save($order_id, $user->uid, $message, 'admin');
+  }
+  else {
+    drupal_set_message('Payment failed; Reason Provided by bank: ' .$result['message'], 'warning');
+    $message = t('Credit card charge failed.');
+    uc_order_comment_save($order_id, $user->uid, $message, 'admin');
+  }
+
+  $result = array(
+    'success' => $success,
+    'comment' => t('Card charged, resolution code'),
+    'message' => $success ? t('Credit card payment processed successfully.') : t('Credit card charge failed.'),
+    'uid' => $user->uid,
+    // 'data' => $data,
+  );
+
+  return $result;
+}

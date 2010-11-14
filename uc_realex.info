@@ -1,0 +1,13 @@
+;$Id: uc_realex.info,v 1.1 2009/10/10 11:56:49 alanburke Exp $
+name           = Ubercart Realex
+core           = 6.x
+description    = "Provides access to the Realex realauth for Ubercart - redirect Only"
+dependencies[] = uc_payment
+package        = Ubercart - payment
+
+; Information added by drupal.org packaging script on 2010-11-12
+version = "6.x-2.x-dev"
+core = "6.x"
+project = "uc_realex"
+datestamp = "1289564691"
+

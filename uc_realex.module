@@ -1,0 +1,309 @@
+<?php
+// $Id: uc_realex.module,v 1.1.2.4 2010/09/27 10:31:03 alanburke Exp $
+
+/**
+ * @file
+ * A module used for Realex payment gateway [Redirect Integration only]
+ *
+ * Developed by Alan Burke, Based on the 2checkout module.
+ *
+ * No Warranty Provided. E & OE.
+ */
+
+/*******************************************************************************
+ * Hook Functions (Drupal)
+ ******************************************************************************/
+
+/**
+ * Implementation of hook_menu().
+ */
+function uc_realex_menu() {
+  $items['cart/uc_realex/complete'] = array(
+    'title' => t('Order complete'),
+    'page callback' => 'uc_realex_complete',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+/*******************************************************************************
+ * Hook Functions (Ubercart)
+ ******************************************************************************/
+function uc_realex_payment_method() {
+  $methods[] = array(
+    'id' => 'uc_realex',
+    'name' => t('Credit Card [realex]'),
+    'title' => t('Credit Card Payment [realex]'),
+    'desc' => t('Redirect to Realex to pay by credit card.'),
+    'callback' => 'uc_payment_method_realex',
+    'weight' => 3,
+    'checkout' => TRUE,
+    'no_gateway' => TRUE,
+  );
+
+  return $methods;
+}
+
+/*******************************************************************************
+ * Callback Functions, Forms, and Tables
+ ******************************************************************************/
+
+/**
+ * Implementation of hook_form_alter().
+ */
+function uc_realex_form_alter(&$form, $form_state, $form_id) {
+  if ($form_id == 'uc_cart_checkout_review_form' && ($order_id = intval($_SESSION['cart_order'])) > 0) {
+    $order = uc_order_load($order_id);
+    if ($order->payment_method == 'uc_realex') {
+      $country = uc_get_country_data(array('country_id' => $order->billing_country));
+      if ($country === FALSE) {
+        $country = array(0 => array('country_iso_code_3' => 'USA'));
+      }
+      unset($form['submit']);
+      $form['#prefix'] = '<table style="display: inline; padding-top: 1em;"><tr><td>';
+      $form['#suffix'] = '</td><td>' . drupal_get_form('uc_realex_form', $order) . '</td></tr></table>';
+    }
+  }
+}
+/**
+ * Prepare and return the form to POST to Realex.
+ */
+function uc_realex_form($form_state, $order) {
+  $form = array();
+      //Replace these with the values you receive from Realex Payments
+      // This is done at the configuration page.
+      $merchantid = variable_get('uc_realex_merchant_id', '');
+      $realex_accountid = variable_get('uc_realex_account_id', 'internet');
+      $secret = variable_get('uc_realex_shared_secret', '');
+
+      //The code below is used to create the timestamp format required by Realex Payments
+      $timestamp = strftime("%Y%m%d%H%M%S");
+      mt_srand((double)microtime() * 1000000);
+
+      // 	orderid: Replace this with the order id you want to use.The order id must be	unique.
+      $orderid = $order->order_id;
+      $curr = variable_get('uc_currency_code', 'EUR');
+      // Realex takes the value in cent.
+      $amount = round(($order->order_total * 100));
+
+      /* Test whether subaccount should be added to Order ID */
+      if(variable_get('uc_realex_modify_order_id', FALSE)){
+        $orderid .= '-' . $realex_accountid;
+      }
+
+      /*-----------------------------------------------
+	Below is the code for creating the digital signature using the MD5 algorithm
+	provided by PHP. you can use the SHA1 algorithm alternatively.
+	*/
+
+      $tmp      = "$timestamp.$merchantid.$orderid.$amount.$curr";
+      $sha1hash = sha1($tmp);
+      $tmp      = "$sha1hash.$secret";
+      $sha1hash = sha1($tmp);
+
+
+      foreach ($order->products as $product) {
+        $items[] = $product->nid;
+      }
+      $products = implode(',', $items);
+
+
+      $data = array(
+        'MERCHANT_ID' => $merchantid,
+        'ACCOUNT' => $realex_accountid,
+        'ORDER_ID' => $orderid,
+        'CURRENCY' => $curr,
+        'AMOUNT' => $amount,
+        'TIMESTAMP' => $timestamp,
+        'SHA1HASH' => $sha1hash,
+        'AUTO_SETTLE_FLAG' => 1,
+        'CUST_NUM' => $order->uid,
+        'PROD_ID' => $products,
+        'VAR_REF' => check_plain($order->primary_email),
+        'uc_cart_id' => uc_cart_get_id(),
+      );
+
+      foreach ($data as $name => $value) {
+        $form[$name] = array('#type' => 'hidden', '#value' => $value);
+      }
+      $form['submit'] = array(
+        '#type' => 'submit',
+        '#name' => '',
+        '#value' => t('Submit Order to Realex'),
+      );
+      $form['#action'] = variable_get('uc_realex_url', 'https://epage.payandshop.com/epage.cgi');
+      
+    return $form; 
+}
+
+/**
+ * Callback for Realex  payment method settings.
+ */
+function uc_payment_method_realex($op, &$arg1) {
+  switch ($op) {
+    case 'settings':
+      $form['uc_realex_merchant_id'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Realex Merchant ID'),
+        '#description' => t('Your Realex merchant ID.'),
+        '#default_value' => variable_get('uc_realex_merchant_id', ''),
+        '#size' => 16,
+      );
+      $form['uc_realex_account_id'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Realex Account ID'),
+        '#description' => t('Your Realex Account ID.'),
+        '#default_value' => variable_get('uc_realex_account_id', 'internet'),
+        '#size' => 16,
+      );
+      $form['uc_realex_modify_order_id'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Modify Order ID'),
+        '#description' => t('Append your account ID to your Order ID. Useful if you have multiple sub accounts on your Realex Account.'),
+        '#default_value' => variable_get('uc_realex_modify_order_id', ''),
+      );
+      $form['uc_realex_shared_secret'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Shared secret for order verification'),
+        '#description' => t('Your Shared Secret as supplied by Realex.'),
+        '#default_value' => variable_get('uc_realex_shared_secret', ''),
+        '#size' => 16,
+      );
+      $form['uc_realex_url'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Realex Gateway URL'),
+        '#description' => t('The Realex URL to submit the order to.'),
+        '#default_value' => variable_get('uc_realex_url', 'https://epage.payandshop.com/epage.cgi'),
+        '#size' => 32,
+      );
+      global $base_url;
+      $form['uc_realex_callback'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Realex Callback Page'),
+        '#description' => t('This is the URL that Realex will redirect their response to. <br/> You should supply this to Realex.'),
+        '#value' => $base_url . '/cart/uc_realex/complete',
+        '#size' => 50,
+        '#attributes' => array('readonly' => 'readonly'),
+      );
+      $form['uc_realex_repsonse'] = array(
+        '#type' => 'textfield',
+        '#title' => t('Realex Request URL'),
+        '#description' => t('This is the URL that Realex will see the request coming from.<br/> You should supply this to Realex.'),
+        '#value' => $base_url . '/cart/checkout/review',
+        '#size' => 50,
+        '#attributes' => array('readonly' => 'readonly'),
+      );
+      return $form;
+  }
+}
+
+/**
+ * Process the Response send back from Realex once payment is completed
+ */
+function uc_realex_complete() {
+  watchdog('uc_realex', t('Receiving new order notification for order @order_id.', array('@order_id' => $_POST['ORDER_ID'])));
+
+  /*
+ Note:The below code is used to grab the fields Realex Payments POSTs back 
+ to this script after a card has been authorised. Realex Payments need
+ to know the full URL of this script in order to POST the data back to this
+ script. Please inform Realex Payments of this URL if they do not have it 
+ already.
+
+ Look at the Realex Documentation to view all hidden fields Realex POSTs back
+ for a card transaction.
+*/
+
+
+  $timestamp  = check_plain($_POST['TIMESTAMP']);
+  $result     = check_plain($_POST['RESULT']);
+  $orderid    = check_plain($_POST['ORDER_ID']);
+  $message    = filter_xss($_POST['MESSAGE']);
+  $authcode   = check_plain($_POST['AUTHCODE']);
+  $pasref     = check_plain($_POST['PASREF']);
+  $realexsha1 = check_plain($_POST['SHA1HASH']);
+  $batch      = check_plain($_POST['BATCHID']);
+  $uc_cart_id = check_plain($_POST['uc_cart_id']);
+  // -------------------------------------------------------------
+  //Replace these with the values you receive from Realex Payments.If you have not yet received these values please contact us.
+  // We retrieve these from the configuration page.
+  $merchantid = variable_get('uc_realex_merchant_id', '');
+  $secret = variable_get('uc_realex_shared_secret', '');
+
+  //---------------------------------------------------------------
+  //Below is the code for creating the digital signature using the md5 algorithm.
+  //This digital siganture should correspond to the
+  //one Realex Payments POSTs back to this script and can therefore be used to verify the message Realex sends back.
+
+  $tmp      = "$timestamp.$merchantid.$orderid.$result.$message.$pasref.$authcode";
+  $sha1hash = sha1($tmp);
+  $tmp      = "$sha1hash.$secret";
+  $sha1hash = sha1($tmp);
+
+  //Check to see if hashes match or not
+  if ($sha1hash != $realexsha1) {
+    watchdog('uc_realex', t('Hash match failed for order @order_id.', array('@order_id' => $_POST['ORDER_ID'])));
+    drupal_set_message("hashes don't match - response not authenticated!");
+  }
+
+  /* --------------------------------------------------------------
+ send yourself an email or send the customer an email or update a database or whatever you want to do here.
+
+ The next part is important to understand. The result field sent back to this
+ response script will indicate whether the card transaction was successful or not.
+ The result 00 indicates it was while anything else indicates it failed. 
+ Refer to the Realex Payments documentation to get a full list to response codes.
+
+
+IMPORTANT: Whatever this response script prints is grabbed by Realex Payments
+and placed in the template again. It is placed wherever the comment "<!--E-PAGE TABLE HERE-->"
+is in the template you provide. This is the case so that from a customer's perspective, they are not suddenly removed from 
+a secure site to an unsecure site. This means that although we call this response script the 
+customer is still on Realex PAyemnt's site and therefore it is recommended that a HTML link is
+printed in order to redirect the customrer back to the merchants site.
+*/
+
+  $order = uc_order_load($orderid);
+
+  if ($order === FALSE || uc_order_status_data($order->order_status, 'state') != 'in_checkout') {
+    $output = t('An error has occurred during payment.  Please contact us to ensure your order has submitted.');
+    print $output;
+    exit();
+  }
+
+  if ($result == '00') {
+    $comment = t('Paid by Realex online for order #@order, Transaction #@transid , Batch #@batchid',
+      array(
+        '@order' => $orderid,
+        '@transid' => $pasref,
+        '@batchid' => $batch,
+      )
+    );
+    uc_payment_enter($order->order_id, 'uc_realex', ($order->order_total), 0, NULL, $comment);
+
+    $output .= uc_cart_complete_sale($order);
+    $output .= '<h3>'. t('Payment Successful!') .'</h3>';
+    $options = array();
+    $options['absolute'] = TRUE;
+    $output .= '<h2>'. l(t('Click to return to website', '<front>', $options)) .'</h2>';
+
+    // Empty that cart...
+    uc_cart_empty($uc_cart_id);
+
+    // Add a comment to let sales team know this came in through the site.
+    uc_order_comment_save($order->order_id, 0, t('Order created through website.'), 'admin');
+  }
+  else {
+    uc_order_comment_save($order->order_id, 0, t('Payment is pending approval at Realex.'), 'admin');
+    $output .= '<h2>'. t('Payment failed') .'</h2>';
+    $output .= '<h3>'. t('Reason provided: ') . $message .'</h3>';
+    $options = array();
+    $options['absolute'] = TRUE;
+    $output .= '<h2>'. l(t('Click to return to website'), '<front>', $options) .'</h2>';
+  }
+
+  print $output;
+  return;
+}
+

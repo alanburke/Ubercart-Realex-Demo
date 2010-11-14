@@ -1,0 +1,15 @@
+;$Id: uc_realex_remote.info,v 1.1.4.2 2010/09/27 09:58:08 alanburke Exp $
+name           = UC Realex Remote
+core           = 6.x
+description    = "Provides access to the Realex Redirect for Ubercart"
+dependencies[] = uc_payment
+dependencies[] = uc_credit
+package        = Ubercart - payment
+php = 5.0
+
+; Information added by drupal.org packaging script on 2010-11-12
+version = "6.x-2.x-dev"
+core = "6.x"
+project = "uc_realex"
+datestamp = "1289564691"
+
