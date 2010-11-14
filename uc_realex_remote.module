@@ -81,7 +81,7 @@ class RealexRemote{
   $this->field_type = array('response' =>1,
                             'orderid' => 1,
                             'authcode' => 1,
-                            'result' => 1,
+                            'result' => 2,
                             'message' => 1,
                             'pasref' => 1,
                             'batchid' => 1,
@@ -245,7 +245,7 @@ if($cvn){
   //This digital siganture should correspond to the 
   //one Realex Payments POSTs back to this script and can therefore be used to verify the message Realex sends back.
   $timestamp = $result['timestamp'];
-  $resultcode = $result['result'];
+  $resultcode = $result['result'][0];
   $message = $result['message'];
   $pasref = $result['pasref'];
   $authcode = $result['authcode'];
@@ -256,7 +256,7 @@ if($cvn){
 
 
   $amount = $amount/100; //[Realex expected the order in cents]
-  if ($result['result'] =='00') {
+  if ($result['result'][0] =='00') {
   //Check to see if hashes match or not
     if ($sha1hash != $result['sha1hash']) {
       watchdog('uc_realex_remote', t('Hash match failed for order !order_id.', array('!order_id' => $result['ubercart_order_id'])));
